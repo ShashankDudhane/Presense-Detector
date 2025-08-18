@@ -1,72 +1,71 @@
-# detection.py
-import cv2
-import face_recognition
-import sys
+from fastapi import FastAPI, UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+import subprocess
+import os
+import uuid
 import json
 
-def run_detection(input_video, template_img, output_video):
-    # Load the face image and encode
-    known_image = face_recognition.load_image_file(template_img)
-    known_encoding = face_recognition.face_encodings(known_image)
-    if not known_encoding:
-        return {"success": False, "message": "No face found in uploaded image"}
-    known_encoding = known_encoding[0]
+app = FastAPI()
 
-    cap = cv2.VideoCapture(input_video)
-    if not cap.isOpened():
-        return {"success": False, "message": "Could not open video"}
+# CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Replace "*" with your frontend URL in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_video, fourcc, 20.0, (int(cap.get(3)), int(cap.get(4))))
+# Ensure directories exist
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("output", exist_ok=True)
+app.mount("/output", StaticFiles(directory="output"), name="output")
 
-    detections = []
-    frame_num = 0
+@app.post("/upload/")
+async def upload(video: UploadFile, image: UploadFile):
+    try:
+        video_path = f"uploads/{uuid.uuid4()}_{video.filename}"
+        image_path = f"uploads/{uuid.uuid4()}_{image.filename}"
+        output_path = f"output/{uuid.uuid4()}_processed.mp4"
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+        # Save files
+        with open(video_path, "wb") as f:
+            f.write(await video.read())
+        with open(image_path, "wb") as f:
+            f.write(await image.read())
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb_frame)
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+        # Run detection.py
+        result = subprocess.run(
+            ["python", "detection.py", video_path, image_path, output_path],
+            capture_output=True,
+            text=True
+        )
 
-        found = False
-        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-            match = face_recognition.compare_faces([known_encoding], face_encoding)[0]
-            if match:
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
-                detections.append({"frame": frame_num, "message": "Face detected"})
-                found = True
+        if result.returncode != 0:
+            return JSONResponse(
+                content={"success": False, "error": result.stderr},
+                status_code=500
+            )
 
-        # Overlay text
-        if found:
-            cv2.putText(frame, f"Frame {frame_num}: Face detected", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
-        else:
-            cv2.putText(frame, "No face detected", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+        try:
+            detection_result = json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            detection_result = {"detections": []}
 
-        out.write(frame)
-        frame_num += 1
+        return JSONResponse(
+            content={
+                "success": True,
+                "videoUrl": f"/{output_path}",
+                "detections": detection_result.get("detections", []),
+                "message": f"{len(detection_result.get('detections', []))} face(s) detected"
+                           if detection_result.get("detections") else "No face detected",
+            }
+        )
 
-    cap.release()
-    out.release()
-
-    return {
-        "success": True,
-        "output_video": output_video,
-        "detections": detections if detections else [{"message": "No face detected in video"}]
-    }
-
-if __name__ == "__main__":
-    if len(sys.argv) < 4:
-        print(json.dumps({"success": False, "message": "Usage: python detection.py <input_video> <template_img> <output_video>"}))
-        sys.exit(1)
-
-    input_video = sys.argv[1]
-    template_img = sys.argv[2]
-    output_video = sys.argv[3]
-
-    result = run_detection(input_video, template_img, output_video)
-    print(json.dumps(result))
+    except Exception as e:
+        return JSONResponse(
+            content={"success": False, "error": str(e)},
+            status_code=500
+        )
