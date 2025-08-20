@@ -88,6 +88,8 @@ def run_detection(video_path, image_path,
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
 
+    total_frames = len(video_tensors)
+
     for i, frame_tensor in enumerate(video_tensors):
         with torch.no_grad():
             frame_features = model(frame_tensor).squeeze().flatten()
@@ -109,6 +111,10 @@ def run_detection(video_path, image_path,
                 "similarity": round(sim, 4),
                 "imageUrl": f"/{out_path.replace(os.sep, '/')}"
             })
+
+        # 🔹 Print progress every frame
+        progress = int(((i + 1) / total_frames) * 100)
+        print(json.dumps({"progress": progress}), flush=True)
 
         if len(detections) >= max_results:
             break
@@ -132,4 +138,5 @@ if __name__ == "__main__":
         sys.exit(1)
     video_path, image_path = sys.argv[1], sys.argv[2]
     result = run_detection(video_path, image_path)
-    print(json.dumps(result))
+    # 🔹 Print final result after progress logs
+    print(json.dumps(result), flush=True)

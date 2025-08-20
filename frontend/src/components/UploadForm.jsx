@@ -1,7 +1,7 @@
 import React, { useState, useRef } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { UploadCloud, Image, Video } from "lucide-react";
+import { Image, Video } from "lucide-react";
 
 function UploadForm({ setDetectionInfo, setProcessingDone }) {
   const [image, setImage] = useState(null);
@@ -30,36 +30,53 @@ function UploadForm({ setDetectionInfo, setProcessingDone }) {
       setProgress(0);
       toast.loading("Processing video...");
 
-      const { data } = await axios.post(
-        "http://127.0.0.1:8000/upload/",
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-          onUploadProgress: (progressEvent) => {
-            const percent = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
-            );
-            setProgress(percent);
-          },
-        }
-      );
+      // Step 1: Upload → get job_id
+      const { data } = await axios.post("http://127.0.0.1:8000/upload/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
-      toast.dismiss();
-      setProgress(0);
-
-      if (!data.success) {
-        toast.error(data.error || "Detection failed");
+      if (!data || !data.job_id) {
+        toast.dismiss();
+        toast.error("Backend did not return a job id");
+        setLoading(false);
         return;
       }
 
-      setDetectionInfo(data.detections);
-      setProcessingDone(true);
-      toast.success("Processing Done ✅");
+      const jobId = data.job_id;
+
+      // Step 2: Poll backend for progress
+      const interval = setInterval(async () => {
+        try {
+          const res = await axios.get(`http://127.0.0.1:8000/progress/${jobId}`);
+          const backendProgress = res.data.progress ?? 0;
+
+          // Smooth progress using linear interpolation
+          setProgress((prev) => Math.max(prev, backendProgress));
+
+          if (res.data.result) {
+            clearInterval(interval);
+            toast.dismiss();
+
+            if (res.data.result.success) {
+              setDetectionInfo(res.data.result.detections);
+              setProcessingDone(true);
+              toast.success("Processing Done ✅");
+            } else {
+              toast.error(res.data.result.error || "Detection failed");
+            }
+            setLoading(false);
+          }
+        } catch (err) {
+          clearInterval(interval);
+          toast.dismiss();
+          toast.error("Failed to fetch progress");
+          setLoading(false);
+        }
+      }, 1000);
     } catch (error) {
       console.error("Upload error:", error);
       toast.dismiss();
       toast.error("Something went wrong — check backend logs.");
-    } finally {
       setLoading(false);
     }
   };
@@ -164,7 +181,7 @@ function UploadForm({ setDetectionInfo, setProcessingDone }) {
       {loading && (
         <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
           <div
-            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+            className="bg-blue-600 h-2 rounded-full transition-[width] duration-500 ease-out"
             style={{ width: `${progress}%` }}
           ></div>
         </div>
@@ -176,7 +193,7 @@ function UploadForm({ setDetectionInfo, setProcessingDone }) {
         disabled={loading}
         className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-60 transition-colors"
       >
-        {loading ? "Processing..." : "🔍 Detect Image in Video"}
+        {loading ? `Processing... ${progress}%` : "🔍 Detect Image in Video"}
       </button>
     </form>
   );
