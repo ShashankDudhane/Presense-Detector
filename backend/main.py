@@ -2,70 +2,88 @@ from fastapi import FastAPI, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-import subprocess
-import os
-import uuid
-import json
+import subprocess, os, uuid, json, sys
 
 app = FastAPI()
 
-# CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace "*" with your frontend URL in production
+    allow_origins=["*"],   # adjust for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Ensure directories exist
+# Ensure folders exist
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("output", exist_ok=True)
+
+# Serve cropped/matched frames at http://127.0.0.1:8000/output/...
 app.mount("/output", StaticFiles(directory="output"), name="output")
 
 @app.post("/upload/")
 async def upload(video: UploadFile, image: UploadFile):
     try:
-        video_path = f"uploads/{uuid.uuid4()}_{video.filename}"
-        image_path = f"uploads/{uuid.uuid4()}_{image.filename}"
-        output_path = f"output/{uuid.uuid4()}_processed.mp4"
+        # Save incoming files
+        video_path = os.path.join("uploads", f"{uuid.uuid4()}_{video.filename}")
+        image_path = os.path.join("uploads", f"{uuid.uuid4()}_{image.filename}")
 
-        # Save files
         with open(video_path, "wb") as f:
             f.write(await video.read())
         with open(image_path, "wb") as f:
             f.write(await image.read())
 
-        # Run detection.py
+        # Use the same interpreter that's running FastAPI
+        py = sys.executable
+
+        # Run detection script and capture JSON
         result = subprocess.run(
-            ["python", "detection.py", video_path, image_path, output_path],
+            [py, "detection_model.py", video_path, image_path],
             capture_output=True,
             text=True
         )
 
+        # Helpful logs for debugging (visible in server console)
+        print("=== detection_model.py STDOUT ===")
+        print(result.stdout)
+        print("=== detection_model.py STDERR ===")
+        print(result.stderr)
+
         if result.returncode != 0:
             return JSONResponse(
-                content={"success": False, "error": result.stderr},
-                status_code=500
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": "Detection script failed",
+                    "details": result.stderr
+                }
+            )
+
+        stdout = (result.stdout or "").strip()
+        if not stdout:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Empty response from detection script"}
             )
 
         try:
-            detection_result = json.loads(result.stdout.strip())
-        except json.JSONDecodeError:
-            detection_result = {"detections": []}
+            detection_result = json.loads(stdout)
+        except json.JSONDecodeError as e:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": "Invalid JSON from detection script",
+                    "details": str(e),
+                    "raw": stdout[:5000],
+                },
+            )
 
-        return JSONResponse(
-            content={
-                "success": True,
-                "videoUrl": f"/{output_path}",
-                "detections": detection_result.get("detections", []),
-                "message": f"{len(detection_result.get('detections', []))} face(s) detected"
-                           if detection_result.get("detections") else "No face detected",
-            }
-        )
+        # ✅ Always pass detection_model.py result back to client
+        return JSONResponse(status_code=200, content=detection_result)
 
     except Exception as e:
         return JSONResponse(
-            content={"success": False, "error": str(e)},
-            status_code=500
+            status_code=500,
+            content={"success": False, "error": str(e)}
         )

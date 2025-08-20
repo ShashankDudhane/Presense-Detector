@@ -11,24 +11,22 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center py-10 px-4">
       <h1 className="text-3xl font-bold text-blue-600 mb-8">
-        🎥 Image in Video Detector
+        🎥 Presence Detector
       </h1>
 
-      <div className="w-full max-w-3xl flex flex-col gap-6">
-        {/* Upload Section */}
+      <div className="w-full max-w-3xl space-y-6">
         <UploadForm
           setVideoUrl={setVideoUrl}
           setProcessingDone={setProcessingDone}
           setDetectionInfo={setDetectionInfo}
         />
 
-        {/* Result Section */}
         {processingDone && (
           <VideoResult videoUrl={videoUrl} detectionInfo={detectionInfo} />
         )}
       </div>
 
-      <Toaster position="top-right" reverseOrder={false} />
+      <Toaster position="top-right" />
     </div>
   );
 }
