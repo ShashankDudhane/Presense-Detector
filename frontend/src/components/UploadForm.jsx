@@ -1,0 +1,209 @@
+import React, { useState, useRef } from "react";
+import axios from "axios";
+import toast from "react-hot-toast";
+import { Image, Video } from "lucide-react";
+
+function UploadForm({ setDetectionInfo, setProcessingDone }) {
+  const [images, setImages] = useState([]); // multiple images
+  const [video, setVideo] = useState(null);
+  const [previewImages, setPreviewImages] = useState([]); // multiple previews
+  const [previewVideo, setPreviewVideo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const imageInputRef = useRef();
+  const videoInputRef = useRef();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (images.length === 0 || !video) {
+      toast.error("Please upload at least one image and a video.");
+      return;
+    }
+
+    const formData = new FormData();
+    images.forEach((img) => formData.append("images", img)); // multiple images
+    formData.append("video", video);
+
+    try {
+      setLoading(true);
+      setProgress(0);
+      toast.loading("Processing video...");
+
+      // Step 1: Upload → get job_id
+      const { data } = await axios.post("http://127.0.0.1:8000/upload/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      if (!data || !data.job_id) {
+        toast.dismiss();
+        toast.error("Backend did not return a job id");
+        setLoading(false);
+        return;
+      }
+
+      const jobId = data.job_id;
+
+      // Step 2: Poll backend for progress
+      const interval = setInterval(async () => {
+        try {
+          const res = await axios.get(`http://127.0.0.1:8000/progress/${jobId}`);
+          const backendProgress = res.data.progress ?? 0;
+
+          // Smooth progress using linear interpolation
+          setProgress((prev) => Math.max(prev, backendProgress));
+
+          if (res.data.result) {
+            clearInterval(interval);
+            toast.dismiss();
+
+            if (res.data.result.success) {
+              setDetectionInfo(res.data.result.detections);
+              setProcessingDone(true);
+              toast.success("Processing Done ✅");
+            } else {
+              toast.error(res.data.result.error || "Detection failed");
+            }
+            setLoading(false);
+          }
+        } catch (err) {
+          clearInterval(interval);
+          toast.dismiss();
+          toast.error("Failed to fetch progress");
+          setLoading(false);
+        }
+      }, 1000);
+    } catch (error) {
+      console.error("Upload error:", error);
+      toast.dismiss();
+      toast.error("Something went wrong — check backend logs.");
+      setLoading(false);
+    }
+  };
+
+  const handleDrop = (e, type) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    if (type === "image") {
+      setImages(files);
+      setPreviewImages(files.map((f) => URL.createObjectURL(f)));
+    } else {
+      const file = files[0];
+      setVideo(file);
+      setPreviewVideo(URL.createObjectURL(file));
+    }
+  };
+
+  const preventDefault = (e) => e.preventDefault();
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="bg-white shadow-2xl rounded-2xl p-8 space-y-6"
+    >
+      <h2 className="text-3xl font-bold text-gray-800 text-center flex items-center justify-center gap-2">
+        🔍 Detect Image(s) in Video
+      </h2>
+
+      {/* Upload Area */}
+      <div className="flex flex-col lg:flex-row gap-6">
+        {/* Image Upload */}
+        <div
+          className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl p-6 hover:border-blue-500 transition-colors cursor-pointer"
+          onClick={() => imageInputRef.current.click()}
+          onDrop={(e) => handleDrop(e, "image")}
+          onDragOver={preventDefault}
+        >
+          {previewImages.length === 0 ? (
+            <>
+              <Image className="w-12 h-12 text-gray-400 mb-2" />
+              <p className="text-gray-500 text-center">
+                Drag & Drop Images or Click to Upload (Multiple Allowed)
+              </p>
+            </>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 w-full">
+              {previewImages.map((src, i) => (
+                <img
+                  key={i}
+                  src={src}
+                  alt={`preview-${i}`}
+                  className="w-full h-32 object-cover rounded-lg shadow"
+                />
+              ))}
+            </div>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            ref={imageInputRef}
+            onChange={(e) => {
+              const files = Array.from(e.target.files);
+              setImages(files);
+              setPreviewImages(files.map((f) => URL.createObjectURL(f)));
+            }}
+            className="hidden"
+          />
+        </div>
+
+        {/* Video Upload */}
+        <div
+          className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl p-6 hover:border-blue-500 transition-colors cursor-pointer"
+          onClick={() => videoInputRef.current.click()}
+          onDrop={(e) => handleDrop(e, "video")}
+          onDragOver={preventDefault}
+        >
+          {!previewVideo ? (
+            <>
+              <Video className="w-12 h-12 text-gray-400 mb-2" />
+              <p className="text-gray-500 text-center">
+                Drag & Drop Video or Click to Upload
+              </p>
+            </>
+          ) : (
+            <video
+              src={previewVideo}
+              controls
+              className="w-full h-48 rounded-lg shadow"
+            />
+          )}
+          <input
+            type="file"
+            accept="video/*"
+            ref={videoInputRef}
+            onChange={(e) => {
+              const f = e.target.files[0];
+              setVideo(f);
+              setPreviewVideo(f ? URL.createObjectURL(f) : null);
+            }}
+            className="hidden"
+          />
+        </div>
+      </div>
+
+      {/* Progress Bar */}
+      {loading && (
+        <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
+          <div
+            className="bg-blue-600 h-2 rounded-full transition-[width] duration-500 ease-out"
+            style={{ width: `${progress}%` }}
+          ></div>
+        </div>
+      )}
+
+      {/* Submit Button */}
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-60 transition-colors"
+      >
+        {loading ? `Processing... ${progress}%` : "🔍 Detect Image(s) in Video"}
+      </button>
+    </form>
+  );
+}
+
+export default UploadForm;
